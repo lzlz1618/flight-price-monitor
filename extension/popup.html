@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>航班价格监控</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">FLIGHT WATCH</p>
+      <h1 id="route">航班价格监控</h1>
+      <p id="range" class="muted">正在读取设置……</p>
+    </div>
+    <span id="enabledBadge" class="badge">--</span>
+  </header>
+
+  <section id="bestCard" class="hero">
+    <span>范围最低价</span>
+    <strong id="bestPrice">--</strong>
+    <p id="bestFlight">等待首次检查</p>
+  </section>
+
+  <section>
+    <div class="section-title">
+      <h2>日期状态</h2>
+      <span>每 5 分钟</span>
+    </div>
+    <div id="dateList" class="date-list"></div>
+  </section>
+
+  <p id="message" class="message" aria-live="polite"></p>
+  <div class="actions">
+    <button id="check" class="primary">立即检查全部</button>
+    <button id="dashboard">设置与趋势</button>
+  </div>
+
+  <script src="core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
+

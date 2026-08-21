@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>航班价格监控 · 设置与趋势</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">FLIGHT PRICE MONITOR</p>
+      <h1>设置与价格趋势</h1>
+      <p>所有设置和价格历史默认只保存在本机浏览器。</p>
+    </div>
+    <div class="top-actions">
+      <button id="runNow" class="secondary">立即检查全部</button>
+      <button id="save" class="primary">保存设置</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel config-panel">
+      <div class="panel-heading">
+        <div><span class="step">01</span><h2>监控条件</h2></div>
+        <label class="switch"><input id="enabled" type="checkbox"><span></span>启用监控</label>
+      </div>
+
+      <div class="route-grid">
+        <label>出发城市
+          <input id="fromCity" list="cityOptions" autocomplete="off" placeholder="例如：福州 (FOC)">
+        </label>
+        <button id="swap" class="swap" type="button" title="交换出发和到达城市">⇄</button>
+        <label>到达城市
+          <input id="toCity" list="cityOptions" autocomplete="off" placeholder="例如：成都 (CTU)">
+        </label>
+      </div>
+      <datalist id="cityOptions"></datalist>
+
+      <div class="form-grid four">
+        <label>开始日期<input id="startDate" type="date"></label>
+        <label>结束日期<input id="endDate" type="date"></label>
+        <label>检查频率<input value="每 5 分钟" disabled></label>
+        <label class="check-card"><input id="directOnly" type="checkbox"><span><strong>仅监控直飞</strong><small>关闭后也记录中转方案</small></span></label>
+      </div>
+      <p class="helper">日期范围支持连续 1–7 天；每个日期均建立独立监控状态。</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><div><span class="step">02</span><h2>提醒方式</h2></div></div>
+      <div class="form-grid three">
+        <label class="check-card"><input id="notifyDrops" type="checkbox"><span><strong>发现降价时提醒</strong><small>按具体航班比较上次价格</small></span></label>
+        <label class="check-card"><input id="targetEnabled" type="checkbox"><span><strong>启用心仪价格</strong><small>低于或等于目标价时提醒</small></span></label>
+        <label>心仪价格（元）<input id="targetPrice" type="number" min="1" step="1" placeholder="700"></label>
+        <label class="check-card"><input id="desktop" type="checkbox"><span><strong>浏览器通知</strong><small>Windows / Edge 桌面通知</small></span></label>
+        <label class="wide">PushPlus Token
+          <input id="pushToken" type="password" autocomplete="off" placeholder="选填，仅保存在本机扩展存储中">
+        </label>
+        <button id="testPush" type="button" class="secondary align-end">测试微信通知</button>
+      </div>
+      <p id="pushStatus" class="helper"></p>
+    </section>
+
+    <section class="panel overview-panel">
+      <div class="panel-heading">
+        <div><span class="step">03</span><h2>日期范围概览</h2></div>
+        <span id="lastUpdated" class="subtle">尚未检查</span>
+      </div>
+      <div id="dateOverview" class="overview-grid"></div>
+    </section>
+
+    <section class="panel trends-panel">
+      <div class="panel-heading">
+        <div><span class="step">04</span><h2>单航班价格趋势</h2></div>
+        <label class="inline-select">选择航班<select id="flightSeries"></select></label>
+      </div>
+      <div id="emptyTrend" class="empty">完成至少一次检查后，可在这里选择某一班航班查看价格趋势。</div>
+      <div id="trendContent" hidden>
+        <div class="trend-stats">
+          <div><span>当前</span><strong id="statCurrent">--</strong></div>
+          <div><span>最低</span><strong id="statMin">--</strong></div>
+          <div><span>最高</span><strong id="statMax">--</strong></div>
+          <div><span>累计变化</span><strong id="statChange">--</strong></div>
+        </div>
+        <div id="chart" class="chart" role="img" aria-label="航班价格趋势图"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>记录时间</th><th>价格</th><th>变化</th></tr></thead>
+            <tbody id="historyRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <p id="saveStatus" class="toast" aria-live="polite"></p>
+  </main>
+
+  <script src="core.js"></script>
+  <script src="cities.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
+
