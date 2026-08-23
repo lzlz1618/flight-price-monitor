@@ -58,7 +58,7 @@
         const signature = JSON.stringify(flights.map(flight => [flight.flightNo, flight.depart, flight.arrive, flight.price]));
         stableReads = signature === previousSignature ? stableReads + 1 : 1;
         previousSignature = signature;
-        if (stableReads >= 2 || attempt >= 8) {
+        if ((stableReads >= 3 && attempt >= 4) || attempt >= 15) {
           await report({ flights }, options);
           return;
         }

@@ -36,5 +36,8 @@ assert.doesNotMatch(
   "a personal PushPlus token was committed"
 );
 assert.doesNotMatch(source, /<script[^>]+src=["']https?:/i, "remote scripts are not allowed in Manifest V3");
+const backgroundSource = fs.readFileSync(path.join(extension, "background.js"), "utf8");
+assert.match(backgroundSource, /releaseMonitorTab/, "temporary monitor tabs must be released");
+assert.match(backgroundSource, /chrome\.tabs\.remove/, "temporary monitor tabs must be closed");
 
 process.stdout.write(`${jsFiles.length} extension scripts passed syntax and privacy validation\n`);

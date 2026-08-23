@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "航班价格趋势与降价监控",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "选择城市和日期范围，监控航班降价、目标价与单航班价格趋势。",
   "permissions": [
     "alarms",

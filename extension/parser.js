@@ -7,6 +7,9 @@
   const PRICE_PATTERN = /[¥￥]\s*([1-9]\d{2,4})(?!\d)/g;
   const FLIGHT_PATTERN = /\b[A-Z0-9]{2}\s?\d{3,4}\b/g;
   const TRANSFER_PATTERN = /中转|经停|停留\s*\d|转\s*[\u4e00-\u9fa5]{1,8}/;
+  const PROMOTION_PATTERN = /最高.*(?:减|省)|(?:立减|返现|返券|优惠券|红包|补贴|立省|可减|再减)/;
+  const PROMOTION_CLASS_PATTERN = /coupon|discount|promo|subsidy|rebate|save|benefit|red.?packet/i;
+  const PRICE_CLASS_PATTERN = /(?:^|[-_\s])(price|prc|fare|amount)(?:$|[-_\s])/i;
 
   const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
   const unique = values => [...new Set(values)];
@@ -19,6 +22,38 @@
     return [...String(text || "").matchAll(PRICE_PATTERN)]
       .map(match => Number(match[1]))
       .filter(price => price >= 100 && price <= 50000);
+  }
+
+  function primaryPriceFromText(text) {
+    const candidates = [];
+    for (const rawLine of String(text || "").split(/\r?\n/)) {
+      const line = normalize(rawLine);
+      if (!line || PROMOTION_PATTERN.test(line)) continue;
+      candidates.push(...pricesFromText(line));
+    }
+    return candidates.length ? Math.min(...candidates) : null;
+  }
+
+  function priceFromElement(element) {
+    if (!element) return null;
+    for (const attribute of ["data-price", "data-amount"]) {
+      const value = Number(String(element.getAttribute?.(attribute) || "").replace(/[^\d.]/g, ""));
+      if (Number.isFinite(value) && value >= 100 && value <= 50000) return Math.round(value);
+    }
+    const text = String(element.innerText || element.textContent || "").trim();
+    if (!text || text.length > 100 || PROMOTION_PATTERN.test(normalize(text))) return null;
+    return primaryPriceFromText(text);
+  }
+
+  function priceConfidence(element) {
+    if (!element) return -1;
+    const descriptor = `${element.className || ""} ${element.id || ""}`;
+    const parentDescriptor = `${element.parentElement?.className || ""} ${element.parentElement?.id || ""}`;
+    if (PROMOTION_CLASS_PATTERN.test(descriptor) || PROMOTION_CLASS_PATTERN.test(parentDescriptor)) return -1;
+    if (element.getAttribute?.("data-price") || element.getAttribute?.("data-amount")) return 3;
+    if (PRICE_CLASS_PATTERN.test(descriptor)) return 2;
+    if (PRICE_CLASS_PATTERN.test(parentDescriptor)) return 1;
+    return 0;
   }
 
   function flightNumbersFrom(text) {
@@ -36,11 +71,14 @@
       .find(line => /航空$|航空公司$|国航$|春秋$/.test(line)) || "未知航司";
   }
 
-  function parseFlightText(text, directOnly = false) {
+  function parseFlightText(text, directOnly = false, priceOverride = null) {
     const times = timesFrom(text);
-    const prices = pricesFromText(text);
     const flightNos = flightNumbersFrom(text);
-    if (times.length < 2 || !prices.length || !flightNos.length) return null;
+    const parsedPrice = Number(priceOverride);
+    const price = Number.isFinite(parsedPrice) && parsedPrice >= 100
+      ? parsedPrice
+      : primaryPriceFromText(text);
+    if (times.length < 2 || !Number.isFinite(price) || !flightNos.length) return null;
     const direct = !isTransferText(text);
     if (directOnly && !direct) return null;
     return {
@@ -49,7 +87,7 @@
       flightNos,
       depart: times[0],
       arrive: times[times.length - 1],
-      price: Math.min(...prices),
+      price,
       direct
     };
   }
@@ -61,13 +99,16 @@
     return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   }
 
-  function nearestFlightCard(node, directOnly) {
+  function nearestFlightCard(node, directOnly, price) {
     let element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
     for (let depth = 0; element && depth < 16; depth += 1, element = element.parentElement) {
       if (!visible(element)) continue;
       const text = element.innerText || "";
       if (text.length < 20 || text.length > 5000) continue;
-      if (parseFlightText(text, directOnly)) return element;
+      const times = timesFrom(text);
+      const flightNos = flightNumbersFrom(text);
+      if (times.length > 6 || flightNos.length > 4) continue;
+      if (parseFlightText(text, directOnly, price)) return element;
     }
     return null;
   }
@@ -87,26 +128,28 @@
   }
 
   function extractFlights(doc = document, directOnly = false) {
-    const cards = new Set();
+    const flightsByIdentity = new Map();
     for (const anchor of priceAnchors(doc)) {
-      const card = nearestFlightCard(anchor, directOnly);
-      if (card) cards.add(card);
-    }
-    const output = [];
-    const seen = new Set();
-    for (const card of cards) {
-      const flight = parseFlightText(card.innerText || "", directOnly);
+      const price = priceFromElement(anchor);
+      if (!Number.isFinite(price)) continue;
+      const confidence = priceConfidence(anchor);
+      if (confidence < 0) continue;
+      const card = nearestFlightCard(anchor, directOnly, price);
+      if (!card) continue;
+      const flight = parseFlightText(card.innerText || "", directOnly, price);
       if (!flight) continue;
       const imageAirline = [...card.querySelectorAll("img[alt]")]
         .map(image => normalize(image.alt))
         .find(value => /航空|国航|春秋/.test(value));
       if (imageAirline) flight.airline = imageAirline;
-      const key = `${flight.flightNo}|${flight.depart}|${flight.arrive}|${flight.price}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      output.push(flight);
+      const key = `${flight.flightNo}|${flight.depart}|${flight.arrive}`;
+      const existing = flightsByIdentity.get(key);
+      if (!existing || confidence > existing.confidence
+        || (confidence === existing.confidence && flight.price < existing.flight.price)) {
+        flightsByIdentity.set(key, { flight, confidence });
+      }
     }
-    return output.sort((a, b) => a.price - b.price);
+    return [...flightsByIdentity.values()].map(item => item.flight).sort((a, b) => a.price - b.price);
   }
 
   function textOf(element) {
@@ -156,6 +199,9 @@
     isTransferText,
     pageProblem,
     parseFlightText,
+    priceConfidence,
+    priceFromElement,
+    primaryPriceFromText,
     pricesFromText,
     timesFrom
   };
