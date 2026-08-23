@@ -1,10 +1,10 @@
 {
   "name": "flight-price-monitor-extension",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "A configurable Edge/Chrome extension for monitoring flight price drops and trends.",
   "scripts": {
-    "test": "node tests/core.test.cjs && node tests/parser.test.cjs && node tests/validate-extension.cjs"
+    "test": "node tests/core.test.cjs && node tests/parser.test.cjs && node tests/background-tabs.test.cjs && node tests/validate-extension.cjs"
   },
   "license": "MIT"
 }

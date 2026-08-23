@@ -4,14 +4,26 @@ const core = globalThis.FlightMonitorCore;
 const DATE_ALARM_PREFIX = "flight-monitor-date:";
 const TIMEOUT_ALARM_PREFIX = "flight-monitor-timeout:";
 const CHECK_TIMEOUT_MINUTES = 1.75;
-const RECOVERY_COOLDOWN_MINUTES = 30;
 let monitorStateWrites = Promise.resolve();
 let resultQueue = Promise.resolve();
+let monitorTabsQueue = Promise.resolve();
 
 function enqueueResult(operation) {
   const result = resultQueue.then(operation, operation);
   resultQueue = result.catch(() => {});
   return result;
+}
+
+function enqueueMonitorTabs(operation) {
+  const result = monitorTabsQueue.then(operation, operation);
+  monitorTabsQueue = result.catch(() => {});
+  return result;
+}
+
+function normalizeMonitorTabEntry(value) {
+  if (Number.isInteger(value)) return { tabId: value, owned: false, legacy: true };
+  if (!value || !Number.isInteger(value.tabId)) return null;
+  return { tabId: value.tabId, owned: Boolean(value.owned), legacy: false };
 }
 const NOTIFICATION_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAJISURBVHhe7dZtautKGAThrCJbzfKVDDhgTEdfBGvUVQ3Pn4vfAUFxcj8+v5ZFXAYAZwBwBgBnAHAGAGcAcAYAZwBwBgBnAHAGAGcAcAYAZwBwBgBnAHAGAGcAcAYAZwBwBgBnAHAGAGcAcAYAZwBwBgBnAHAGAGcAcAYAZwBwBgBnAHAGAIcIYCz9dxUG8NfSb1UWwNbSDR0qgLF0R4b5E/C7dEOGC2As3VEhAxhLt0R1AQx7lu6IsAGMpVsaA4BDBzCW7kkqAxiOLN1TGMDP0j2FATyW3iCoDWA4snRPYABPS2+0M4CXpXeaVQcwHF16o5kBhKV3Wk0XwNrS77ecWXqn1a0CGEs3a84uvdVoyj8BW0s3a84uvdXGAFaW3mpzywDuuPSdM5gygKF16VuvZAAXLH3vVaYNYGhd+tar+C/ABUvfexUDePPSt17JAN689K1XmjKAxqXvnMEtA0g3a84uvdXmdgGk3285s/ROo+kCWFv6/R5nlt5pVB/AmaV3Wk35J+A/nVl6p5UBvCy90aw6gKNLb7QzgKelN9oZwGPpnqA2gCNL9xQG8LN0T4EPIN2SoANIdzSVAexduqXBBpDuiAwAri6APUt3VLgA0g2ZAcBVBbC1dEOHCSD9XgaAV/f/ADrGAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAG1ZvgH6BjR7W8TJ6AAAAABJRU5ErkJggg==";
 
@@ -71,26 +83,96 @@ function dateFromUrl(url) {
 }
 
 async function getMonitorTab(date, settings, active = false) {
-  const stored = await chrome.storage.local.get("monitorTabs");
-  const monitorTabs = { ...(stored.monitorTabs || {}) };
-  let tab = null;
-  if (monitorTabs[date]) {
+  return enqueueMonitorTabs(async () => {
+    const stored = await chrome.storage.local.get("monitorTabs");
+    const monitorTabs = { ...(stored.monitorTabs || {}) };
+    const storedEntry = normalizeMonitorTabEntry(monitorTabs[date]);
+    let tab = null;
+    let owned = Boolean(storedEntry?.owned);
+    if (storedEntry) {
+      try {
+        const candidate = await chrome.tabs.get(storedEntry.tabId);
+        if (dateFromUrl(candidate.url) === date) tab = candidate;
+      } catch {}
+    }
+    if (!tab) {
+      const candidates = await chrome.tabs.query({ url: "https://flight.qunar.com/site/oneway_list.htm*" });
+      tab = candidates.find(candidate => dateFromUrl(candidate.url) === date) || null;
+      owned = false;
+    }
+    const url = core.buildSearchUrl(settings, date);
+    if (!tab) {
+      tab = await chrome.tabs.create({ url, active });
+      owned = !active;
+    } else if (tab.url !== url) {
+      tab = await chrome.tabs.update(tab.id, { url, active });
+    } else if (active) {
+      tab = await chrome.tabs.update(tab.id, { active: true });
+    }
+    if (active) owned = false;
+    monitorTabs[date] = { tabId: tab.id, owned };
+    await chrome.storage.local.set({ monitorTabs });
+    return { tab, owned };
+  });
+}
+
+function routeMatchesUrl(url, settings) {
+  try {
+    const params = new URL(url).searchParams;
+    return params.get("searchDepartureAirport") === settings.route.fromCity
+      && params.get("searchArrivalAirport") === settings.route.toCity;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseMonitorTab(date, tabId) {
+  if (!Number.isInteger(tabId)) return false;
+  return enqueueMonitorTabs(async () => {
+    const stored = await chrome.storage.local.get("monitorTabs");
+    const monitorTabs = { ...(stored.monitorTabs || {}) };
+    const entry = normalizeMonitorTabEntry(monitorTabs[date]);
+    if (!entry || entry.tabId !== tabId) return false;
+    delete monitorTabs[date];
+    await chrome.storage.local.set({ monitorTabs });
+    if (!entry.owned) return false;
     try {
-      const candidate = await chrome.tabs.get(monitorTabs[date]);
-      if (dateFromUrl(candidate.url) === date) tab = candidate;
-    } catch {}
-  }
-  if (!tab) {
-    const candidates = await chrome.tabs.query({ url: "https://flight.qunar.com/site/oneway_list.htm*" });
-    tab = candidates.find(candidate => dateFromUrl(candidate.url) === date) || null;
-  }
-  const url = core.buildSearchUrl(settings, date);
-  if (!tab) tab = await chrome.tabs.create({ url, active });
-  else if (tab.url !== url) tab = await chrome.tabs.update(tab.id, { url, active });
-  else if (active) tab = await chrome.tabs.update(tab.id, { active: true });
-  monitorTabs[date] = tab.id;
-  await chrome.storage.local.set({ monitorTabs });
-  return tab;
+      await chrome.tabs.remove(tabId);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function cleanupOrphanedMonitorTabs() {
+  return enqueueMonitorTabs(async () => {
+    const stored = await chrome.storage.local.get("monitorTabs");
+    const monitorTabs = { ...(stored.monitorTabs || {}) };
+    for (const [date, value] of Object.entries(monitorTabs)) {
+      const entry = normalizeMonitorTabEntry(value);
+      if (!entry?.legacy) continue;
+      try {
+        const tab = await chrome.tabs.get(entry.tabId);
+        if (tab.url?.startsWith("https://flight.qunar.com/site/oneway_list.htm")) {
+          await chrome.tabs.remove(entry.tabId);
+        }
+      } catch {}
+      delete monitorTabs[date];
+    }
+    await chrome.storage.local.set({ monitorTabs });
+  });
+}
+
+async function cleanupInactiveSearchTabs(settings) {
+  const dates = new Set(core.dateRange(settings.startDate, settings.endDate));
+  const tabs = await chrome.tabs.query({ url: "https://flight.qunar.com/site/oneway_list.htm*" });
+  const removable = tabs.filter(tab => !tab.active
+    && dates.has(dateFromUrl(tab.url))
+    && routeMatchesUrl(tab.url, settings));
+  if (!removable.length) return 0;
+  await chrome.tabs.remove(removable.map(tab => tab.id));
+  return removable.length;
 }
 
 async function waitForTabReady(tabId, timeoutMs = 30000) {
@@ -138,10 +220,14 @@ async function checkDate(date, { active = false } = {}) {
   });
   await chrome.alarms.create(`${TIMEOUT_ALARM_PREFIX}${date}`, { delayInMinutes: CHECK_TIMEOUT_MINUTES });
 
-  const tab = await getMonitorTab(date, settings, active);
+  const monitorTab = await getMonitorTab(date, settings, active);
+  const tab = monitorTab.tab;
   const latestSettings = await ensureSettings();
-  if (latestSettings.revision !== settings.revision) return { ok: false, skipped: true };
-  await setDateState(date, { tabId: tab.id });
+  if (latestSettings.revision !== settings.revision) {
+    await releaseMonitorTab(date, tab.id);
+    return { ok: false, skipped: true };
+  }
+  await setDateState(date, { tabId: tab.id, tabOwned: monitorTab.owned });
   await waitForTabReady(tab.id);
   try {
     const response = await chrome.tabs.sendMessage(tab.id, {
@@ -281,18 +367,6 @@ async function handleSuccess(message, sender) {
   }
 }
 
-async function maybeRecover(date, tabId, failureCount, userActionRequired) {
-  if (!tabId || userActionRequired || failureCount < 2) return;
-  const state = await getState();
-  const lastRecoveryAt = state.monitorState.byDate?.[date]?.lastRecoveryAt;
-  const elapsed = lastRecoveryAt ? Date.now() - new Date(lastRecoveryAt).getTime() : Infinity;
-  if (elapsed < RECOVERY_COOLDOWN_MINUTES * 60 * 1000) return;
-  try {
-    await setDateState(date, { lastRecoveryAt: new Date().toISOString(), message: "连续失败，正在自动恢复页面……" });
-    await chrome.tabs.reload(tabId);
-  } catch {}
-}
-
 async function handleFailure(error, date, tabId, userActionRequired = false, requestId = null, settingsRevision = null) {
   await chrome.alarms.clear(`${TIMEOUT_ALARM_PREFIX}${date}`);
   const state = await getState();
@@ -313,7 +387,6 @@ async function handleFailure(error, date, tabId, userActionRequired = false, req
   await chrome.action.setBadgeText({ text: "!" });
   await chrome.action.setBadgeBackgroundColor({ color: "#d93025" });
   if (failureCount === 3) await notify(state.settings, "航班监控连续失败", `${date}：${error}`);
-  await maybeRecover(date, tabId || old.tabId, failureCount, userActionRequired);
   await updateBadge(next);
 }
 
@@ -328,11 +401,14 @@ async function saveSettings(input) {
 
   const newDates = new Set(core.dateRange(validation.settings.startDate, validation.settings.endDate));
   const monitorTabs = { ...(oldStored.monitorTabs || {}) };
-  for (const [date, tabId] of Object.entries(monitorTabs)) {
+  for (const [date, value] of Object.entries(monitorTabs)) {
     if (newDates.has(date)) continue;
+    const entry = normalizeMonitorTabEntry(value);
     try {
-      const tab = await chrome.tabs.get(tabId);
-      if (tab.url?.startsWith("https://flight.qunar.com/site/oneway_list.htm")) await chrome.tabs.remove(tabId);
+      const tab = entry ? await chrome.tabs.get(entry.tabId) : null;
+      if (entry?.owned && tab?.url?.startsWith("https://flight.qunar.com/site/oneway_list.htm")) {
+        await chrome.tabs.remove(entry.tabId);
+      }
     } catch {}
     delete monitorTabs[date];
   }
@@ -366,12 +442,25 @@ async function runAllNow(active = false) {
 }
 
 async function initialize() {
+  await cleanupOrphanedMonitorTabs();
   const settings = await ensureSettings();
   await setupAlarms(settings);
 }
 
 chrome.runtime.onInstalled.addListener(details => {
-  initialize().then(() => {
+  initialize().then(async () => {
+    if (details.reason === "update") {
+      const settings = await ensureSettings();
+      await cleanupInactiveSearchTabs(settings);
+      if (details.previousVersion === "2.0.0") {
+        await chrome.storage.local.set({
+          monitorState: { byDate: {} },
+          priceHistory: {},
+          alertState: { targets: {} }
+        });
+        await chrome.action.setBadgeText({ text: "" });
+      }
+    }
     if (details.reason === "install") chrome.runtime.openOptionsPage();
   });
 });
@@ -385,15 +474,28 @@ chrome.alarms.onAlarm.addListener(alarm => {
     const date = alarm.name.slice(TIMEOUT_ALARM_PREFIX.length);
     getState().then(state => {
       const item = state.monitorState.byDate?.[date];
-      if (item?.checking) enqueueResult(() => handleFailure("页面检查超时，扩展稍后会自动恢复。", date, item.tabId, false, item.requestId, item.settingsRevision));
+      if (item?.checking) enqueueResult(async () => {
+        try {
+          await handleFailure("页面检查超时，扩展将在下轮重新检查。", date, item.tabId, false, item.requestId, item.settingsRevision);
+        } finally {
+          await releaseMonitorTab(date, item.tabId);
+        }
+      });
     });
   }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "flightResult") {
-    if (message.flights?.length) enqueueResult(() => handleSuccess(message, sender)).then(() => sendResponse({ ok: true }));
-    else enqueueResult(() => handleFailure(message.error || "没有识别到航班。", message.date, sender.tab?.id, Boolean(message.userActionRequired), message.requestId, message.settingsRevision))
+    const userActionRequired = Boolean(message.userActionRequired);
+    enqueueResult(async () => {
+      try {
+        if (message.flights?.length) await handleSuccess(message, sender);
+        else await handleFailure(message.error || "没有识别到航班。", message.date, sender.tab?.id, userActionRequired, message.requestId, message.settingsRevision);
+      } finally {
+        if (!userActionRequired) await releaseMonitorTab(message.date, sender.tab?.id);
+      }
+    })
       .then(() => sendResponse({ ok: true }));
     return true;
   }
